@@ -198,40 +198,29 @@ void PrintFileMetadata(const std::string& filePath)
 
 
 void SendFile(ReliableConnection& connection, const std::string& filePath) {
+	// Extracting the name of file from the path
+	std::string fileName = filepath.substr(filePath.find_last_of("/ \\") + 1);
+
+	// Sending the name of the file
+	connection.SendPacket(reinterpret_cast<const unsigned char*>(fileName.c_str()), fileName.size() + 1);    // include the null terminator
+
+	// Opening the file in binary mode
 	std::ifstream file(filePath, std::ios::binary);
-	if (!file) {
-		printf("Failed to open file: %s\n", filePath.c_str());
+	if (!file)
+	{
+		printf("Unable to open the file!! %s\n", filepath.c_str());
 		return;
 	}
 
-	unsigned char buffer[PacketSize - sizeof(uint32_t)];
-	uint32_t sequence = 0;
-
-	while (file) {
-		file.read(reinterpret_cast<char*>(buffer), sizeof(buffer));
-		std::streamsize bytesRead = file.gcount();
-
-		if (bytesRead > 0) {
-			// Create a packet with sequence number and data
-			unsigned char packet[PacketSize];
-			memcpy(packet, &sequence, sizeof(sequence));
-			memcpy(packet + sizeof(sequence), buffer, bytesRead);
-
-			// Send the packet
-			if (!connection.SendPacket(packet, static_cast<int>(sizeof(sequence) + bytesRead))) {
-				printf("Failed to send packet %u\n", sequence);
-				break;
-			}
-
-			printf("Sent packet %u (%lld bytes)\n", sequence, bytesRead);
-			sequence++;
-		}
+	// Sending the data of the file.
+	char buffer[PacketSize];
+	while (file.read(buffer, sizeof(buffer)) || file.gcount() > 0)
+	{
+		connection.SendPacket(reinterpret_cast<const unsigned char*>(buffer), file.gcount());
 	}
 
-	// Send a termination packet
-	unsigned char endPacket[sizeof(uint32_t)] = { 0xFF, 0xFF, 0xFF, 0xFF };
-	connection.SendPacket(endPacket, sizeof(endPacket));
-	printf("File transfer completed. Sent termination packet.\n");
+	file.close();
+	printf("Binary file %s has been sent successfully.\n", filepath.c_str());
 }
 
 void ReceiveFile(ReliableConnection& connection, const std::string& destinationPath) {
@@ -457,7 +446,7 @@ int main(int argc, char* argv[])
 
 		if (mode == Client && connected)
 		{
-			std::string desktopPath = "C:/Users/amala/Desktop/received_file.txt";  // Change this to your desired file name
+			std::string desktopPath = "D:/Assignment Level-4/SENG2040-Network Application Development/received_file.txt";  // Change this to your desired file name
 			ReceiveFile(connection, desktopPath);
 		}
 
