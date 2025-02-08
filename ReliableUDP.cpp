@@ -125,17 +125,17 @@ private:
 /*
 Reference - https://barrgroup.com/blog/crc-series-part-3-crc-implementation-code-cc
 */
-typedef unit8_t crc;  // Define CRC as 8-bit
+typedef uint8_t crc;  // Define CRC as 8-bit
 crc crcCalc(uint8_t const message[], int nBytes)
 {
-	crc reminder = 0;
+	crc remainder = 0;
 
 	for (int byte = 0; byte < nBytes; ++byte)
 	{
-		reminder ^= (message[byte] << (WIDTH - 8));
+		remainder ^= (message[byte] << (WIDTH - 8));
 		for (uint8_t bit = 8; bit > 0; --bit)
 		{
-			if (reminder & TOPBIT)
+			if (remainder & TOPBIT)
 			{
 				remainder = (remainder << 1) ^ POLYNOMIAL;
 			}
@@ -154,7 +154,7 @@ crc crcCalc(uint8_t const message[], int nBytes)
 void SendIt(ReliableConnection& connection, const std::string& filePath) {
 	using namespace std::chrono;
 	// Extracting the name of file from the path
-	std::string fileName = filepath.substr(filePath.find_last_of("/\\") + 1);
+	std::string fileName = filePath.substr(filePath.find_last_of("/\\") + 1);
 
 	// Sending the name of the file
 	connection.SendPacket(reinterpret_cast<const unsigned char*>(fileName.c_str()), fileName.size() + 1);    // include the null terminator
@@ -163,11 +163,11 @@ void SendIt(ReliableConnection& connection, const std::string& filePath) {
 	std::ifstream file(filePath, std::ios::binary);
 	if (!file)
 	{
-		printf("Unable to open the file!! %s\n", filepath.c_str());
+		printf("Unable to open the file!! %s\n", filePath.c_str());
 		return;
 	}
 	// Read content for CRC calculation
-	std::vector<uint8_t> filecontent((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+	std::vector<uint8_t> fileContent((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 	file.close();
 
 	crc checksum = crcCalc(fileContent.data(), fileContent.size());
@@ -175,7 +175,7 @@ void SendIt(ReliableConnection& connection, const std::string& filePath) {
 	// Start timing
 	auto start = high_resolution_clock::now();
 	// Send file content
-	for (size_t i = 0; i < filecontent.size(); i += PacketSize)
+	for (size_t i = 0; i < fileContent.size(); i += PacketSize)
 	{
 		size_t chunkSize = (PacketSize < (fileContent.size() - i)) ? PacketSize : (fileContent.size() - i);
 		connection.SendPacket(fileContent.data() + i, chunkSize);
@@ -410,7 +410,7 @@ int main(int argc, char* argv[])
 				return 1;
 			}
 
-			std::string filepath = argv[1];
+			std::string filePath = argv[1];
 			SendIt(connection, filePath);
 		}
 
