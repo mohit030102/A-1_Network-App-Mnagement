@@ -1,3 +1,7 @@
+#define WIDTH (8 * sizeof(crc))
+#define TOPBIT (1 << (WIDTH - 1))
+#define POLYNOMIAL 0x07
+#define NOMINMAX
 /*
 	Reliability and Flow Control Example
 	From "Networking for Game Programmers" - http://www.gaffer.org/networking-for-game-programmers
@@ -8,28 +12,13 @@
 #include <fstream>
 #include <string>
 #include <vector>
-#include <fstream>
 #include <sys/stat.h>
 #include <cstdio>
 #include <ctime>
 #include <cstring>
+#include <chrono>
+
 #include "Net.h"
-struct FileMetadata
-{
-	std::string fileName;
-	std::string fileType;
-	size_t fileSize;
-	std::string creationDate;
-	std::string modificationDate;
-	std::string accessDate;
-	std::string owner;
-	std::string permissions;
-	std::string keywords;
-	std::string checksum;
-	std::string filePath;
-};
-
-
 //#define SHOW_ACKS
 
 using namespace std;
@@ -133,73 +122,39 @@ private:
 	float penalty_reduction_accumulator;
 };
 
-/**/
-
-////////////////////////////////////////////
-// Simple checksum calculation
-unsigned long CalculateChecksum(const std::string& filePath)
+/*
+Reference - https://barrgroup.com/blog/crc-series-part-3-crc-implementation-code-cc
+*/
+typedef unit8_t crc;  // Define CRC as 8-bit
+crc crcCalc(uint8_t const message[], int nBytes)
 {
-	FILE* file = fopen(filePath.c_str(), "rb");
-	if (!file)
-		return 0;
+	crc reminder = 0;
 
-	unsigned long checksum = 0;
-	char buffer[1024];
-	size_t bytesRead;
-
-	while ((bytesRead = fread(buffer, 1, sizeof(buffer), file)) > 0)
+	for (int byte = 0; byte < nBytes; ++byte)
 	{
-		for (size_t i = 0; i < bytesRead; ++i)
+		reminder ^= (message[byte] << (WIDTH - 8));
+		for (uint8_t bit = 8; bit > 0; --bit)
 		{
-			checksum += buffer[i];
+			if (reminder & TOPBIT)
+			{
+				remainder = (remainder << 1) ^ POLYNOMIAL;
+			}
+			else
+			{
+				remainder = (remainder << 1);
+			}
 		}
 	}
-
-	fclose(file);
-	return checksum;
-}
-
-void PrintFileMetadata(const std::string& filePath)
-{
-	struct stat fileStat;
-
-	if (stat(filePath.c_str(), &fileStat) != 0)
-	{
-		printf("Error: Could not retrieve metadata for file: %s\n", filePath.c_str());
-		return;
-	}
-
-	// File size
-	size_t fileSize = fileStat.st_size;
-
-	// Modification time
-	char modTime[20];
-	strftime(modTime, sizeof(modTime), "%Y-%m-%d %H:%M:%S", localtime(&fileStat.st_mtime));
-
-#ifdef _WIN32
-	// Windows-specific check for directory
-	const char* fileType = (fileStat.st_mode & _S_IFDIR) ? "Directory" : "Regular File";
-#else
-	// POSIX check for directory
-	const char* fileType = S_ISDIR(fileStat.st_mode) ? "Directory" : "Regular File";
-#endif
-
-	// Simple checksum
-	unsigned long checksum = CalculateChecksum(filePath);
-
-	// Print metadata
-	printf("File Metadata:\n");
-	printf("  File Path: %s\n", filePath.c_str());
-	printf("  File Type: %s\n", fileType);
-	printf("  File Size: %zu bytes\n", fileSize);
-	printf("  Modification Date: %s\n", modTime);
-	printf("  Checksum (Simple): %lu\n", checksum);
+	return remainder;
 }
 
 
-void SendFile(ReliableConnection& connection, const std::string& filePath) {
+
+
+void SendIt(ReliableConnection& connection, const std::string& filePath) {
+	using namespace std::chrono;
 	// Extracting the name of file from the path
-	std::string fileName = filepath.substr(filePath.find_last_of("/ \\") + 1);
+	std::string fileName = filepath.substr(filePath.find_last_of("/\\") + 1);
 
 	// Sending the name of the file
 	connection.SendPacket(reinterpret_cast<const unsigned char*>(fileName.c_str()), fileName.size() + 1);    // include the null terminator
@@ -211,64 +166,97 @@ void SendFile(ReliableConnection& connection, const std::string& filePath) {
 		printf("Unable to open the file!! %s\n", filepath.c_str());
 		return;
 	}
+	// Read content for CRC calculation
+	std::vector<uint8_t> filecontent((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+	file.close();
 
-	// Sending the data of the file.
-	char buffer[PacketSize];
-	while (file.read(buffer, sizeof(buffer)) || file.gcount() > 0)
+	crc checksum = crcCalc(fileContent.data(), fileContent.size());
+	printf("CRC for file: 0x%02X\n", checksum);
+	// Start timing
+	auto start = high_resolution_clock::now();
+	// Send file content
+	for (size_t i = 0; i < filecontent.size(); i += PacketSize)
 	{
-		connection.SendPacket(reinterpret_cast<const unsigned char*>(buffer), file.gcount());
+		size_t chunkSize = (PacketSize < (fileContent.size() - i)) ? PacketSize : (fileContent.size() - i);
+		connection.SendPacket(fileContent.data() + i, chunkSize);
 	}
 
-	file.close();
-	printf("Binary file %s has been sent successfully.\n", filepath.c_str());
+	// Send CRC as final packet
+	connection.SendPacket(reinterpret_cast<const unsigned char*>(&checksum), sizeof(checksum));
+	// End timing
+	auto end = high_resolution_clock::now();
+
+	// Calculate transmission time
+	duration<double> timeTook = end - start;
+	double inSeconds = timeTook.count();
+
+	// Calculate transfer speed in megabits per second
+	double fileSizeInMegabits = (fileContent.size() * 8) / (1024.0 * 1024.0); // Convert bytes to megabits
+	double speedMbps = fileSizeInMegabits / inSeconds;
+
+	printf("File %s sent with CRC 0x%02X.\n", filePath.c_str(), checksum);
+	printf("Transmission Time: %.2f seconds\n", inSeconds);
+	printf("Transfer Speed: %.2f Mbps\n", speedMbps);
 }
 
-void ReceiveFile(ReliableConnection& connection, const std::string& destinationPath) {
-	std::ofstream file(destinationPath, std::ios::binary);
-	if (!file) {
-		printf("Failed to open file for writing: %s\n", destinationPath.c_str());
+void ReceiveIt(ReliableConnection& connection) 
+{
+	char fileNameBuffer[256] = { 0 };
+	int bytesRead = connection.ReceivePacket(reinterpret_cast<unsigned char*>(fileNameBuffer), sizeof(fileNameBuffer));
+
+	if (bytesRead <= 0 || bytesRead >= sizeof(fileNameBuffer))
+	{
+		printf("Invalid filename received.\n");
 		return;
 	}
 
-	uint32_t expectedSequence = 0;
-	unsigned char buffer[PacketSize];
-
-	while (true) {
-		int bytesReceived = connection.ReceivePacket(buffer, sizeof(buffer));
-
-		if (bytesReceived > 0) {
-			// Check for termination packet
-			if (bytesReceived == sizeof(uint32_t) &&
-				memcmp(buffer, "\xFF\xFF\xFF\xFF", sizeof(uint32_t)) == 0) {
-				printf("Received termination packet. File transfer complete.\n");
-				break;
-			}
-
-			// Extract sequence number and data
-			uint32_t receivedSequence;
-			memcpy(&receivedSequence, buffer, sizeof(receivedSequence));
-
-			if (receivedSequence == expectedSequence) {
-				file.write(reinterpret_cast<char*>(buffer + sizeof(receivedSequence)),
-					bytesReceived - sizeof(receivedSequence));
-				//printf("Received and wrote packet %u (%d bytes)\n", receivedSequence, bytesReceived - sizeof(receivedSequence));
-
-				expectedSequence++;
-
-				// Send acknowledgment for the received packet
-				connection.SendPacket(reinterpret_cast<unsigned char*>(&receivedSequence), sizeof(receivedSequence));
-			}
-			else {
-				printf("Out-of-order packet %u received. Expected %u. Ignored.\n", receivedSequence, expectedSequence);
-			}
-		}
+	std::string fileName(fileNameBuffer, bytesRead);
+	if (fileName.empty() || fileName.find_first_of("\\/:*?\"<>|") != std::string::npos)
+	{
+		printf("Invalid filename received.\n");
+		return;
 	}
 
-	file.close();
-	printf("File received successfully and saved to %s\n", destinationPath.c_str());
+	std::ofstream outFile(fileName, std::ios::binary);
+	if (!outFile)
+	{
+		printf("Failed to create file: %s\n", fileName.c_str());
+		return;
+	}
+
+	char buffer[1024];
+	crc receivedChecksum = 0;
+	crc calculatedChecksum = 0;
+	bool fileReceived = false;
+
+	while ((bytesRead = connection.ReceivePacket(reinterpret_cast<unsigned char*>(buffer), sizeof(buffer))) > 0)
+	{
+		if (bytesRead == 1)
+		{
+			// Assume the last packet contains the CRC
+			receivedChecksum = static_cast<crc>(buffer[0]);
+			fileReceived = true; // Mark file as received
+			break;
+		}
+
+		calculatedChecksum ^= crcCalc(reinterpret_cast<const uint8_t*>(buffer), bytesRead);
+		outFile.write(buffer, bytesRead);
+	}
+
+	outFile.close();
+
+	if (fileReceived)
+	{
+		if (calculatedChecksum == receivedChecksum)
+		{
+			printf("File %s received successfully with valid checksum: 0x%02X\n", fileName.c_str(), receivedChecksum);
+		}
+		else
+		{
+			printf("Checksum mismatch! Received: 0x%02X, Calculated: 0x%02X\n", receivedChecksum, calculatedChecksum);
+		}
+	}
 }
-
-
 
 
 
@@ -298,28 +286,6 @@ int main(int argc, char* argv[])
 		{
 			mode = Client;
 			address = Address(a, b, c, d, ServerPort);
-		}
-	}
-
-	// Get The File
-	std::string filePath;
-
-	if (mode == Client)
-	{
-		try
-		{
-			if (argc < 3)
-			{
-				throw std::runtime_error("File path not provided. Usage: <program> <server_ip> <file_path>");
-			}
-			filePath = argv[2];
-			printf("File path provided: %s\n", filePath.c_str());
-			PrintFileMetadata(filePath);
-		}
-		catch (const std::exception& e)
-		{
-			printf("Error: %s\n", e.what());
-			return 1;
 		}
 	}
 
@@ -437,17 +403,20 @@ int main(int argc, char* argv[])
 
 		net::wait(DeltaTime);
 
-		// Add the file sending/receiving logic here:
 		if (mode == Server && connected)
 		{
-			std::string filePath = "C:/Users/amala/Desktop/file.txt";  // Change this path to the file you want to send
-			SendFile(connection, filePath);
+			if (argc < 2)
+			{
+				return 1;
+			}
+
+			std::string filepath = argv[1];
+			SendIt(connection, filePath);
 		}
 
 		if (mode == Client && connected)
 		{
-			std::string desktopPath = "D:/Assignment Level-4/SENG2040-Network Application Development/received_file.txt";  // Change this to your desired file name
-			ReceiveFile(connection, desktopPath);
+			ReceiveIt(connection);
 		}
 
 	}
